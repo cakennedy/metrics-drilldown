@@ -3,6 +3,8 @@ name: Set Expected Start Date (GitHub App)
 on:
   issues:
     types: [opened, edited, transferred]
+  project_v2_item:
+    types: [edited]  # Triggers when project fields change (GitHub App only)
   workflow_dispatch: # Allow manual testing
 
 jobs:
@@ -121,6 +123,31 @@ jobs:
             // Handle different event types
             if (context.eventName === 'issues') {
               issueNumber = context.payload.issue?.number;
+            } else if (context.eventName === 'project_v2_item') {
+              // Get issue number from project item
+              const projectItemId = context.payload.project_v2_item?.id;
+              if (projectItemId) {
+                const itemQuery = `
+                  query {
+                    node(id: "${projectItemId}") {
+                      ... on ProjectV2Item {
+                        content {
+                          ... on Issue {
+                            number
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                try {
+                  const itemResult = await github.graphql(itemQuery);
+                  issueNumber = itemResult.node?.content?.number;
+                } catch (error) {
+                  console.log("Failed to get issue from project item:", error.message);
+                  return;
+                }
+              }
             }
 
             if (!issueNumber) {

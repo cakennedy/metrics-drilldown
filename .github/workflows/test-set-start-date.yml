@@ -3,8 +3,6 @@ name: Test Set Start Date (Personal GitHub App)
 on:
   issues:
     types: [opened, edited, transferred]
-  project_v2_item:
-    types: [edited]  # Triggers when project fields change
   workflow_dispatch: # Allow manual testing
     inputs:
       issue_number:

@@ -42,11 +42,32 @@ jobs:
             console.log(`📋 Target project: #${projectNumber} (https://github.com/${owner}/projects/${projectNumber})`);
             console.log(`👤 Testing with user: ${owner}`);
 
+            // Test what we can access first
+            console.log("🔍 Testing basic user access...");
+            
+            const userQuery = `
+              query {
+                user(login: "${owner}") {
+                  login
+                  name
+                  id
+                }
+              }
+            `;
+            
+            try {
+              const userResult = await github.graphql(userQuery);
+              console.log(`✅ User access works: ${userResult.user.login} (${userResult.user.name})`);
+            } catch (error) {
+              console.log(`❌ Basic user access failed: ${error.message}`);
+            }
+            
             // For personal account, query user projects instead of organization
             const projectQuery = `
               query {
                 user(login: "${owner}") {
                   projectsV2(first: 10) {
+                    totalCount
                     nodes {
                       id
                       title
@@ -76,11 +97,22 @@ jobs:
             try {
               const projectResult = await github.graphql(projectQuery);
               const projects = projectResult.user.projectsV2.nodes;
+              const totalCount = projectResult.user.projectsV2.totalCount;
               
-              console.log(`🔍 Found ${projects.length} projects:`);
-              projects.forEach(p => {
-                console.log(`  - "${p.title}" (#${p.number})`);
-              });
+              console.log(`🔍 ProjectsV2 query result:`);
+              console.log(`  Total count: ${totalCount}`);
+              console.log(`  Returned projects: ${projects.length}`);
+              
+              if (projects.length > 0) {
+                projects.forEach(p => {
+                  console.log(`  - "${p.title}" (#${p.number})`);
+                });
+              } else {
+                console.log(`💡 No projects returned. This could mean:`);
+                console.log(`  1. You don't have any projects yet`);
+                console.log(`  2. The GitHub App lacks permission to read personal projects`);
+                console.log(`  3. Personal projects require different API access`);
+              }
               
               const project = projects.find(p => p.number === projectNumber);
 

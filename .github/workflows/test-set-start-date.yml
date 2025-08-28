@@ -62,6 +62,35 @@ jobs:
               console.log(`❌ Basic user access failed: ${error.message}`);
             }
             
+            // Test with viewer (authenticated user) instead of specific user
+            console.log("🔍 Testing projects access as authenticated viewer...");
+            const viewerQuery = `
+              query {
+                viewer {
+                  login
+                  projectsV2(first: 10) {
+                    totalCount
+                    nodes {
+                      id
+                      title
+                      number
+                    }
+                  }
+                }
+              }
+            `;
+            
+            try {
+              const viewerResult = await github.graphql(viewerQuery);
+              console.log(`👤 Viewer: ${viewerResult.viewer.login}`);
+              console.log(`📊 Viewer projects: ${viewerResult.viewer.projectsV2.totalCount} total, ${viewerResult.viewer.projectsV2.nodes.length} returned`);
+              viewerResult.viewer.projectsV2.nodes.forEach(p => {
+                console.log(`  - "${p.title}" (#${p.number})`);
+              });
+            } catch (error) {
+              console.log(`❌ Viewer projects query failed: ${error.message}`);
+            }
+            
             // For personal account, query user projects instead of organization
             const projectQuery = `
               query {

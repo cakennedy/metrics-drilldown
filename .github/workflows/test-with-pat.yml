@@ -1,0 +1,112 @@
+name: Test with Personal Access Token
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to test with'
+        required: false
+        type: string
+      project_number:
+        description: 'Project number to test with'
+        required: false
+        type: string
+
+jobs:
+  test_with_pat:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test Project Access with PAT
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}  # Uses default token first
+          script: |
+            const { owner, repo } = context.repo;
+            const projectNumber = '${{ github.event.inputs.project_number }}' || 1;
+            
+            console.log(`🧪 PAT TEST: Testing with default GITHUB_TOKEN`);
+            console.log(`👤 Owner: ${owner}`);
+            console.log(`📋 Looking for project #${projectNumber}`);
+            
+            // Test viewer access first
+            const viewerQuery = `
+              query {
+                viewer {
+                  login
+                  projectsV2(first: 20) {
+                    totalCount
+                    nodes {
+                      id
+                      title
+                      number
+                      url
+                    }
+                  }
+                }
+              }
+            `;
+            
+            try {
+              const result = await github.graphql(viewerQuery);
+              console.log(`✅ Viewer: ${result.viewer.login}`);
+              console.log(`📊 Found ${result.viewer.projectsV2.totalCount} total projects`);
+              console.log(`📋 Returned ${result.viewer.projectsV2.nodes.length} projects:`);
+              
+              result.viewer.projectsV2.nodes.forEach(p => {
+                console.log(`  - "${p.title}" (#${p.number}) - ${p.url}`);
+              });
+              
+              const targetProject = result.viewer.projectsV2.nodes.find(p => p.number === parseInt(projectNumber));
+              
+              if (targetProject) {
+                console.log(`🎯 Found target project: "${targetProject.title}" (#${targetProject.number})`);
+                
+                // Query the project details including fields
+                const projectDetailQuery = `
+                  query {
+                    node(id: "${targetProject.id}") {
+                      ... on ProjectV2 {
+                        id
+                        title
+                        number
+                        fields(first: 100) {
+                          nodes {
+                            ...on ProjectV2Field {
+                              id
+                              name
+                              dataType
+                            }
+                            ...on ProjectV2SingleSelectField {
+                              id
+                              name
+                              dataType
+                              options {
+                                id
+                                name
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                const projectDetails = await github.graphql(projectDetailQuery);
+                console.log(`🔍 Project fields:`);
+                projectDetails.node.fields.nodes.forEach(field => {
+                  console.log(`  - ${field.name} (${field.dataType})`);
+                  if (field.options) {
+                    console.log(`    Options: ${field.options.map(o => o.name).join(', ')}`);
+                  }
+                });
+                
+              } else {
+                console.log(`❌ Project #${projectNumber} not found in your projects`);
+                console.log(`💡 Available project numbers: ${result.viewer.projectsV2.nodes.map(p => p.number).join(', ')}`);
+              }
+              
+            } catch (error) {
+              console.error(`❌ GraphQL query failed: ${error.message}`);
+              console.log(`💡 This might be a token permissions issue.`);
+            }

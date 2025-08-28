@@ -105,20 +105,63 @@ jobs:
               console.log(`✅ Using existing issue #${issueNumber}`);
             }
             
-            // Step 3: Add issue to project
-            console.log(`\n🔍 Step 3: Adding issue to project...`);
-            const addToProjectMutation = `
-              mutation($projectId: ID!, $contentId: ID!) {
-                addProjectV2ItemByContentId(input: {
-                  projectId: $projectId,
-                  contentId: $contentId
-                }) {
-                  item {
-                    id
+            // Step 3: Add issue to project (skip if already exists)
+            console.log(`\n🔍 Step 3: Checking if issue is already in project...`);
+            
+            // First check if issue is already in the project
+            const checkProjectItemQuery = `
+              query {
+                repository(owner: "${owner}", name: "${repo}") {
+                  issue(number: ${issueNumber}) {
+                    projectItems(first: 10) {
+                      nodes {
+                        id
+                        project {
+                          id
+                        }
+                      }
+                    }
                   }
                 }
               }
             `;
+            
+            const checkResult = await github.graphql(checkProjectItemQuery);
+            let projectItemId = checkResult.repository.issue.projectItems.nodes.find(
+              item => item.project.id === project.id
+            )?.id;
+            
+            if (projectItemId) {
+              console.log(`✅ Issue already in project. Item ID: ${projectItemId}`);
+            } else {
+              console.log(`Adding issue to project...`);
+              const addToProjectMutation = `
+                mutation($projectId: ID!, $contentId: ID!) {
+                  addProjectV2ItemById(input: {
+                    projectId: $projectId,
+                    contentId: $contentId
+                  }) {
+                    item {
+                      id
+                    }
+                  }
+                }
+              `;
+              
+              try {
+                const addResult = await github.graphql(addToProjectMutation, {
+                  projectId: project.id,
+                  contentId: issueId
+                });
+                projectItemId = addResult.addProjectV2ItemById.item.id;
+                console.log(`✅ Added issue to project. Item ID: ${projectItemId}`);
+              } catch (addError) {
+                console.log(`❌ Failed to add issue to project: ${addError.message}`);
+                console.log(`💡 You may need to manually add issue #${issueNumber} to project #${projectNumber}`);
+                core.setFailed(`Could not add issue to project: ${addError.message}`);
+                return;
+              }
+            }
             
             // Get issue global ID
             const issueQuery = `
@@ -136,13 +179,8 @@ jobs:
             const issueId = issueResult.repository.issue.id;
             console.log(`✅ Issue global ID: ${issueId}`);
             
-            try {
-              const addResult = await github.graphql(addToProjectMutation, {
-                projectId: project.id,
-                contentId: issueId
-              });
-              const projectItemId = addResult.addProjectV2ItemByContentId.item.id;
-              console.log(`✅ Added issue to project. Item ID: ${projectItemId}`);
+            // Continue with the workflow logic
+            if (projectItemId) {
               
               // Step 4: Set status to "In Progress"
               console.log(`\n🔍 Step 4: Setting status to "In Progress"...`);
@@ -265,38 +303,7 @@ jobs:
               
               console.log(`\n🎉 Workflow test completed successfully!`);
               
-            } catch (error) {
-              if (error.message.includes('already exists')) {
-                console.log(`ℹ️ Issue is already in the project, continuing...`);
-                
-                // Get the existing project item
-                const existingItemQuery = `
-                  query {
-                    repository(owner: "${owner}", name: "${repo}") {
-                      issue(number: ${issueNumber}) {
-                        projectItems(first: 10) {
-                          nodes {
-                            id
-                            project {
-                              id
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                `;
-                
-                const existingResult = await github.graphql(existingItemQuery);
-                const projectItem = existingResult.repository.issue.projectItems.nodes.find(
-                  item => item.project.id === project.id
-                );
-                
-                if (projectItem) {
-                  console.log(`✅ Found existing project item: ${projectItem.id}`);
-                  // Continue with the workflow logic using this project item...
-                }
-              } else {
-                throw error;
-              }
+            } else {
+              console.log(`❌ No project item ID found. Cannot continue with workflow test.`);
+              core.setFailed('Project item not found');
             }

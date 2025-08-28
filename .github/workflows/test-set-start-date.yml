@@ -1,0 +1,299 @@
+name: Test Set Start Date (Personal GitHub App)
+
+on:
+  issues:
+    types: [opened, edited, transferred]
+  workflow_dispatch: # Allow manual testing
+    inputs:
+      issue_number:
+        description: 'Issue number to test with'
+        required: false
+        type: string
+      project_number:
+        description: 'Project number to test with'
+        required: false
+        type: string
+
+jobs:
+  test_set_start_date:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: generate_token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.TEST_APP_ID }}
+          private-key: ${{ secrets.TEST_PRIVATE_KEY }}
+          
+      - name: Get Project and Field IDs
+        id: get_ids
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.generate_token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            // Use manual input for testing, or default to a test project
+            const projectNumber = '${{ github.event.inputs.project_number }}' || 1; // Change this to your test project number
+            const expectedStartDateFieldName = "Start Date";
+            const statusFieldName = "Status";
+            const inProgressStatusValue = "In Progress";
+            
+            console.log(`🧪 TEST MODE: Processing event: ${context.eventName}`);
+            console.log(`📋 Target project: #${projectNumber} (https://github.com/${owner}/projects/${projectNumber})`);
+            console.log(`👤 Testing with user: ${owner}`);
+
+            // For personal account, query user projects instead of organization
+            const projectQuery = `
+              query {
+                user(login: "${owner}") {
+                  projectV2(number: ${projectNumber}) {
+                    id
+                    title
+                    number
+                    fields(first: 100) {
+                      nodes {
+                        ...on ProjectV2Field {
+                          id
+                          name
+                        }
+                        ...on ProjectV2SingleSelectField {
+                          id
+                          name
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            try {
+              const projectResult = await github.graphql(projectQuery);
+              const project = projectResult.user.projectV2;
+
+              if (!project) {
+                console.log(`❌ Project #${projectNumber} not found.`);
+                console.log(`💡 Make sure you have a project in your personal account with number ${projectNumber}`);
+                core.setFailed(`Project #${projectNumber} not found or not accessible.`);
+                return;
+              }
+              
+              console.log(`✅ Found project: "${project.title}" (#${project.number})`);
+              console.log(`📝 Project ID: ${project.id}`);
+
+              // Log all available fields for debugging
+              console.log(`🔍 Available fields in project:`);
+              project.fields.nodes.forEach(field => {
+                console.log(`  - ${field.name} (ID: ${field.id})`);
+                if (field.options) {
+                  console.log(`    Options: ${field.options.map(o => o.name).join(', ')}`);
+                }
+              });
+
+              const expectedStartDateField = project.fields.nodes.find(f => f.name === expectedStartDateFieldName);
+              const statusField = project.fields.nodes.find(f => f.name === statusFieldName);
+              const inProgressOption = statusField?.options.find(o => o.name === inProgressStatusValue);
+
+              if (!expectedStartDateField) {
+                console.log(`❌ "${expectedStartDateFieldName}" field not found.`);
+                console.log(`💡 Create a Date field named "${expectedStartDateFieldName}" in your project.`);
+              }
+              if (!statusField) {
+                console.log(`❌ "${statusFieldName}" field not found.`);
+                console.log(`💡 Create a Single Select field named "${statusFieldName}" in your project.`);
+              }
+              if (!inProgressOption) {
+                console.log(`❌ "${inProgressStatusValue}" option not found in Status field.`);
+                console.log(`💡 Add "${inProgressStatusValue}" as an option to your Status field.`);
+              }
+
+              if (!expectedStartDateField || !statusField || !inProgressOption) {
+                core.setFailed("Required project fields or status option not found. Check the logs above for setup instructions.");
+                return;
+              }
+
+              core.setOutput("projectId", project.id);
+              core.setOutput("expectedStartDateFieldId", expectedStartDateField.id);
+              core.setOutput("statusFieldId", statusField.id);
+              core.setOutput("inProgressOptionId", inProgressOption.id);
+
+            } catch (error) {
+              console.error("❌ Error querying project:", error.message);
+              console.log("🔍 This might be a permissions issue. Make sure your GitHub App has:");
+              console.log("  - Repository permission: Issues (Read & Write)");
+              console.log("  - Organization permission: Projects (Write) - or User Projects access");
+              core.setFailed(`Failed to query project: ${error.message}`);
+            }
+
+      - name: Check if Issue is in "In Progress" and Update Date
+        if: steps.get_ids.outputs.projectId
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.generate_token.outputs.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const projectId = '${{ steps.get_ids.outputs.projectId }}';
+            const expectedStartDateFieldId = '${{ steps.get_ids.outputs.expectedStartDateFieldId }}';
+            const statusFieldId = '${{ steps.get_ids.outputs.statusFieldId }}';
+            const inProgressOptionId = '${{ steps.get_ids.outputs.inProgressOptionId }}';
+            
+            // Check if we have all required IDs
+            if (!projectId || !expectedStartDateFieldId || !statusFieldId || !inProgressOptionId) {
+              console.log("❌ Missing required project field IDs. Skipping issue processing.");
+              return;
+            }
+
+            let issueNumber = null;
+
+            // Handle different event types and manual testing
+            if (context.eventName === 'issues') {
+              issueNumber = context.payload.issue?.number;
+              console.log(`🎯 Processing issue event for #${issueNumber}`);
+            } else if (context.eventName === 'workflow_dispatch') {
+              issueNumber = '${{ github.event.inputs.issue_number }}' || null;
+              console.log(`🧪 Manual test mode - issue #${issueNumber || 'not specified'}`);
+            }
+
+            if (!issueNumber) {
+              console.log("ℹ️ No issue number found. For manual testing, provide an issue number in the workflow inputs.");
+              return;
+            }
+
+            console.log(`🔍 Processing issue #${issueNumber}`);
+
+            // Get current status and expected start date for the issue
+            const issueQuery = `
+              query {
+                repository(owner: "${owner}", name: "${repo}") {
+                  issue(number: ${issueNumber}) {
+                    title
+                    number
+                    projectItems(first: 10) {
+                      nodes {
+                        id
+                        project {
+                          id
+                          title
+                        }
+                        fieldValues(first: 20) {
+                          nodes {
+                            ...on ProjectV2ItemFieldSingleSelectValue {
+                              field {
+                                ...on ProjectV2SingleSelectField {
+                                  id
+                                  name
+                                }
+                              }
+                              optionId
+                              name
+                            }
+                            ...on ProjectV2ItemFieldDateValue {
+                              field {
+                                ...on ProjectV2Field {
+                                  id
+                                  name
+                                }
+                              }
+                              date
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            try {
+              const issueResult = await github.graphql(issueQuery);
+              const issue = issueResult.repository.issue;
+              
+              console.log(`📋 Issue: "${issue.title}" (#${issue.number})`);
+              console.log(`🔗 Projects this issue is in: ${issue.projectItems.nodes.length}`);
+              
+              issue.projectItems.nodes.forEach((item, index) => {
+                console.log(`  Project ${index + 1}: ${item.project.title} (ID: ${item.project.id})`);
+              });
+
+              const projectItem = issue.projectItems.nodes.find(
+                item => item.project.id === projectId
+              );
+
+              if (!projectItem) {
+                console.log(`ℹ️ Issue #${issueNumber} is not in the target project.`);
+                console.log(`💡 Add the issue to your test project to test the workflow.`);
+                return;
+              }
+
+              console.log(`✅ Issue found in target project!`);
+
+              // Log all field values for debugging
+              console.log(`🔍 Current field values:`);
+              projectItem.fieldValues.nodes.forEach(fv => {
+                if (fv.field) {
+                  if (fv.name) {
+                    console.log(`  - ${fv.field.name}: ${fv.name}`);
+                  } else if (fv.date) {
+                    console.log(`  - ${fv.field.name}: ${fv.date}`);
+                  }
+                }
+              });
+
+              const statusValue = projectItem.fieldValues.nodes.find(
+                fv => fv.field?.id === statusFieldId
+              );
+              const currentStatusValueId = statusValue?.optionId;
+              const currentStatusName = statusValue?.name;
+
+              const expectedStartDateValue = projectItem.fieldValues.nodes.find(
+                fv => fv.field?.id === expectedStartDateFieldId
+              );
+              const currentExpectedStartDateValue = expectedStartDateValue?.date;
+
+              console.log(`📊 Status Analysis:`);
+              console.log(`  Current status: ${currentStatusName || 'Not set'} (ID: ${currentStatusValueId || 'None'})`);
+              console.log(`  Expected "In Progress" ID: ${inProgressOptionId}`);
+              console.log(`  Current start date: ${currentExpectedStartDateValue || 'Not set'}`);
+
+              if (currentStatusValueId === inProgressOptionId && !currentExpectedStartDateValue) {
+                const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+                console.log(`🎯 Conditions met! Setting start date to: ${today}`);
+
+                const updateMutation = `
+                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Date!) {
+                    updateProjectV2ItemFieldValue(input: {
+                      projectId: $projectId,
+                      itemId: $itemId,
+                      fieldId: $fieldId,
+                      value: { date: $value }
+                    }) {
+                      projectV2Item {
+                        id
+                      }
+                    }
+                  }
+                `;
+
+                await github.graphql(updateMutation, {
+                  projectId: projectId,
+                  itemId: projectItem.id,
+                  fieldId: expectedStartDateFieldId,
+                  value: today
+                });
+
+                console.log(`✅ Start Date set to ${today} for issue #${issueNumber}.`);
+              } else if (currentStatusValueId === inProgressOptionId && currentExpectedStartDateValue) {
+                console.log(`ℹ️ Issue #${issueNumber} is in 'In Progress' and Start Date is already set (${currentExpectedStartDateValue}). No action taken.`);
+              } else {
+                console.log(`ℹ️ Issue #${issueNumber} is not in 'In Progress' status. No action taken.`);
+                console.log(`💡 To test: Move the issue to 'In Progress' status in your project board.`);
+              }
+            } catch (error) {
+              console.error("❌ Error processing issue:", error.message);
+              core.setFailed(`Failed to process issue: ${error.message}`);
+            }

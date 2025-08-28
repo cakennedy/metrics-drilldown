@@ -3,6 +3,8 @@ name: Test Set Start Date (Personal GitHub App)
 on:
   issues:
     types: [opened, edited, transferred]
+  project_v2_item:
+    types: [edited]  # Triggers when project fields change
   workflow_dispatch: # Allow manual testing
     inputs:
       issue_number:
@@ -223,6 +225,42 @@ jobs:
             if (context.eventName === 'issues') {
               issueNumber = context.payload.issue?.number;
               console.log(`🎯 Processing issue event for #${issueNumber}`);
+            } else if (context.eventName === 'project_v2_item') {
+              console.log(`📋 Processing project item event...`);
+              
+              // Get the project item to find the associated issue
+              const projectItemId = context.payload.project_v2_item?.id;
+              if (projectItemId) {
+                console.log(`📋 Project item ID: ${projectItemId}`);
+                
+                // Query to get issue from project item
+                const itemQuery = `
+                  query {
+                    node(id: "${projectItemId}") {
+                      ... on ProjectV2Item {
+                        content {
+                          ... on Issue {
+                            number
+                            title
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                try {
+                  const itemResult = await github.graphql(itemQuery);
+                  issueNumber = itemResult.node?.content?.number;
+                  if (issueNumber) {
+                    console.log(`🎯 Found issue #${issueNumber} from project item`);
+                  } else {
+                    console.log(`⚠️ Project item is not linked to an issue`);
+                  }
+                } catch (error) {
+                  console.log(`❌ Failed to get issue from project item: ${error.message}`);
+                }
+              }
             } else if (context.eventName === 'workflow_dispatch') {
               issueNumber = '${{ github.event.inputs.issue_number }}' || null;
               console.log(`🧪 Manual test mode - issue #${issueNumber || 'not specified'}`);

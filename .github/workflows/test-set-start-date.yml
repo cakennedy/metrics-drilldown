@@ -18,18 +18,11 @@ jobs:
   test_set_start_date:
     runs-on: ubuntu-latest
     steps:
-      - name: Generate GitHub App Token
-        id: generate_token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.TEST_APP_ID }}
-          private-key: ${{ secrets.TEST_PRIVATE_KEY }}
-          
       - name: Get Project and Field IDs
         id: get_ids
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.generate_token.outputs.token }}
+          github-token: ${{ secrets.TEST_PAT }}
           script: |
             const { owner, repo } = context.repo;
             // Use manual input for testing, or default to a test project
@@ -203,7 +196,7 @@ jobs:
         if: steps.get_ids.outputs.projectId
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.generate_token.outputs.token }}
+          github-token: ${{ secrets.TEST_PAT }}
           script: |
             const { owner, repo } = context.repo;
             const projectId = '${{ steps.get_ids.outputs.projectId }}';

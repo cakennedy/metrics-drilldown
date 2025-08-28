@@ -35,12 +35,18 @@ jobs:
             // Use manual input for testing, or default to a test project
             const projectNumber = '${{ github.event.inputs.project_number }}' || 1; // Change this to your test project number
             const expectedStartDateFieldName = "Start Date";
+            console.log("expectedStartDateFieldName", expectedStartDateFieldName);
             const statusFieldName = "Status";
+            console.log("statusFieldName", statusFieldName);
             const inProgressStatusValue = "In Progress";
+            console.log("inProgressStatusValue", inProgressStatusValue);
             
             console.log(`🧪 TEST MODE: Processing event: ${context.eventName}`);
+            console.log("projectNumber", projectNumber);
             console.log(`📋 Target project: #${projectNumber} (https://github.com/${owner}/projects/${projectNumber})`);
             console.log(`👤 Testing with user: ${owner}`);
+            console.log("context.eventName", context.eventName);
+            console.log("${owner}", ${owner});
 
             // For personal account, query user projects instead of organization
             const projectQuery = `

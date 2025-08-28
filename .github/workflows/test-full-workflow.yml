@@ -1,0 +1,302 @@
+name: Test Full Workflow with PAT
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to test with (will create one if not provided)'
+        required: false
+        type: string
+      project_number:
+        description: 'Project number to test with'
+        required: false
+        type: string
+        default: '1'
+
+jobs:
+  test_full_workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test Complete Workflow Logic
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.TEST_PAT }}
+          script: |
+            const { owner, repo } = context.repo;
+            const projectNumber = parseInt('${{ github.event.inputs.project_number }}' || '1');
+            let issueNumber = '${{ github.event.inputs.issue_number }}' || null;
+            
+            console.log(`🧪 FULL WORKFLOW TEST`);
+            console.log(`👤 Owner: ${owner}`);
+            console.log(`📋 Project: #${projectNumber}`);
+            
+            // Step 1: Get project details
+            console.log(`\n🔍 Step 1: Getting project details...`);
+            const projectQuery = `
+              query {
+                viewer {
+                  projectsV2(first: 10) {
+                    nodes {
+                      id
+                      title
+                      number
+                      fields(first: 100) {
+                        nodes {
+                          ...on ProjectV2Field {
+                            id
+                            name
+                            dataType
+                          }
+                          ...on ProjectV2SingleSelectField {
+                            id
+                            name
+                            dataType
+                            options {
+                              id
+                              name
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+            
+            const projectResult = await github.graphql(projectQuery);
+            const project = projectResult.viewer.projectsV2.nodes.find(p => p.number === projectNumber);
+            
+            if (!project) {
+              core.setFailed(`Project #${projectNumber} not found`);
+              return;
+            }
+            
+            console.log(`✅ Found project: "${project.title}"`);
+            
+            // Find required fields
+            const statusField = project.fields.nodes.find(f => f.name === "Status");
+            const startDateField = project.fields.nodes.find(f => f.name === "Start Date");
+            const inProgressOption = statusField?.options?.find(o => o.name === "In Progress");
+            
+            if (!statusField || !startDateField || !inProgressOption) {
+              core.setFailed(`Missing required fields. Status: ${!!statusField}, Start Date: ${!!startDateField}, In Progress option: ${!!inProgressOption}`);
+              return;
+            }
+            
+            console.log(`✅ Found required fields:`);
+            console.log(`  - Status field ID: ${statusField.id}`);
+            console.log(`  - Start Date field ID: ${startDateField.id}`);
+            console.log(`  - In Progress option ID: ${inProgressOption.id}`);
+            
+            // Step 2: Create or find test issue
+            console.log(`\n🔍 Step 2: Setting up test issue...`);
+            if (!issueNumber) {
+              console.log(`Creating new test issue...`);
+              const newIssue = await github.rest.issues.create({
+                owner,
+                repo,
+                title: `Test issue for workflow - ${new Date().toISOString()}`,
+                body: 'This is a test issue created by the workflow test. Safe to close.'
+              });
+              issueNumber = newIssue.data.number;
+              console.log(`✅ Created test issue #${issueNumber}`);
+            } else {
+              console.log(`✅ Using existing issue #${issueNumber}`);
+            }
+            
+            // Step 3: Add issue to project
+            console.log(`\n🔍 Step 3: Adding issue to project...`);
+            const addToProjectMutation = `
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemByContentId(input: {
+                  projectId: $projectId,
+                  contentId: $contentId
+                }) {
+                  item {
+                    id
+                  }
+                }
+              }
+            `;
+            
+            // Get issue global ID
+            const issueQuery = `
+              query {
+                repository(owner: "${owner}", name: "${repo}") {
+                  issue(number: ${issueNumber}) {
+                    id
+                    title
+                  }
+                }
+              }
+            `;
+            
+            const issueResult = await github.graphql(issueQuery);
+            const issueId = issueResult.repository.issue.id;
+            console.log(`✅ Issue global ID: ${issueId}`);
+            
+            try {
+              const addResult = await github.graphql(addToProjectMutation, {
+                projectId: project.id,
+                contentId: issueId
+              });
+              const projectItemId = addResult.addProjectV2ItemByContentId.item.id;
+              console.log(`✅ Added issue to project. Item ID: ${projectItemId}`);
+              
+              // Step 4: Set status to "In Progress"
+              console.log(`\n🔍 Step 4: Setting status to "In Progress"...`);
+              const setStatusMutation = `
+                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: $projectId,
+                    itemId: $itemId,
+                    fieldId: $fieldId,
+                    value: { singleSelectOptionId: $optionId }
+                  }) {
+                    projectV2Item {
+                      id
+                    }
+                  }
+                }
+              `;
+              
+              await github.graphql(setStatusMutation, {
+                projectId: project.id,
+                itemId: projectItemId,
+                fieldId: statusField.id,
+                optionId: inProgressOption.id
+              });
+              console.log(`✅ Set status to "In Progress"`);
+              
+              // Step 5: Check current field values
+              console.log(`\n🔍 Step 5: Checking current field values...`);
+              const checkFieldsQuery = `
+                query {
+                  node(id: "${projectItemId}") {
+                    ... on ProjectV2Item {
+                      fieldValues(first: 20) {
+                        nodes {
+                          ...on ProjectV2ItemFieldSingleSelectValue {
+                            field {
+                              ...on ProjectV2SingleSelectField {
+                                id
+                                name
+                              }
+                            }
+                            optionId
+                            name
+                          }
+                          ...on ProjectV2ItemFieldDateValue {
+                            field {
+                              ...on ProjectV2Field {
+                                id
+                                name
+                              }
+                            }
+                            date
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              const fieldValuesResult = await github.graphql(checkFieldsQuery);
+              const fieldValues = fieldValuesResult.node.fieldValues.nodes;
+              
+              const currentStatus = fieldValues.find(fv => fv.field?.id === statusField.id);
+              const currentStartDate = fieldValues.find(fv => fv.field?.id === startDateField.id);
+              
+              console.log(`📊 Current field values:`);
+              console.log(`  - Status: ${currentStatus?.name || 'Not set'} (option ID: ${currentStatus?.optionId || 'None'})`);
+              console.log(`  - Start Date: ${currentStartDate?.date || 'Not set'}`);
+              
+              // Step 6: Apply the workflow logic
+              console.log(`\n🔍 Step 6: Applying workflow logic...`);
+              const isInProgress = currentStatus?.optionId === inProgressOption.id;
+              const hasStartDate = !!currentStartDate?.date;
+              
+              console.log(`📋 Workflow conditions:`);
+              console.log(`  - Is in "In Progress"? ${isInProgress}`);
+              console.log(`  - Has start date? ${hasStartDate}`);
+              console.log(`  - Should set start date? ${isInProgress && !hasStartDate}`);
+              
+              if (isInProgress && !hasStartDate) {
+                const today = new Date().toISOString().split('T')[0];
+                console.log(`🎯 Setting start date to: ${today}`);
+                
+                const setStartDateMutation = `
+                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: Date!) {
+                    updateProjectV2ItemFieldValue(input: {
+                      projectId: $projectId,
+                      itemId: $itemId,
+                      fieldId: $fieldId,
+                      value: { date: $value }
+                    }) {
+                      projectV2Item {
+                        id
+                      }
+                    }
+                  }
+                `;
+                
+                await github.graphql(setStartDateMutation, {
+                  projectId: project.id,
+                  itemId: projectItemId,
+                  fieldId: startDateField.id,
+                  value: today
+                });
+                
+                console.log(`✅ Successfully set start date to ${today}`);
+                
+                // Verify the update
+                const verifyResult = await github.graphql(checkFieldsQuery);
+                const updatedFieldValues = verifyResult.node.fieldValues.nodes;
+                const updatedStartDate = updatedFieldValues.find(fv => fv.field?.id === startDateField.id);
+                console.log(`🔍 Verification: Start date is now ${updatedStartDate?.date || 'still not set'}`);
+                
+              } else if (isInProgress && hasStartDate) {
+                console.log(`ℹ️ Issue is in "In Progress" but start date is already set (${currentStartDate.date}). No action needed.`);
+              } else {
+                console.log(`ℹ️ Issue is not in "In Progress" status. No action needed.`);
+              }
+              
+              console.log(`\n🎉 Workflow test completed successfully!`);
+              
+            } catch (error) {
+              if (error.message.includes('already exists')) {
+                console.log(`ℹ️ Issue is already in the project, continuing...`);
+                
+                // Get the existing project item
+                const existingItemQuery = `
+                  query {
+                    repository(owner: "${owner}", name: "${repo}") {
+                      issue(number: ${issueNumber}) {
+                        projectItems(first: 10) {
+                          nodes {
+                            id
+                            project {
+                              id
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                const existingResult = await github.graphql(existingItemQuery);
+                const projectItem = existingResult.repository.issue.projectItems.nodes.find(
+                  item => item.project.id === project.id
+                );
+                
+                if (projectItem) {
+                  console.log(`✅ Found existing project item: ${projectItem.id}`);
+                  // Continue with the workflow logic using this project item...
+                }
+              } else {
+                throw error;
+              }
+            }

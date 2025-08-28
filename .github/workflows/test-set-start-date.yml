@@ -46,22 +46,24 @@ jobs:
             const projectQuery = `
               query {
                 user(login: "${owner}") {
-                  projectV2(number: ${projectNumber}) {
-                    id
-                    title
-                    number
-                    fields(first: 100) {
-                      nodes {
-                        ...on ProjectV2Field {
-                          id
-                          name
-                        }
-                        ...on ProjectV2SingleSelectField {
-                          id
-                          name
-                          options {
+                  projectsV2(first: 10) {
+                    nodes {
+                      id
+                      title
+                      number
+                      fields(first: 100) {
+                        nodes {
+                          ...on ProjectV2Field {
                             id
                             name
+                          }
+                          ...on ProjectV2SingleSelectField {
+                            id
+                            name
+                            options {
+                              id
+                              name
+                            }
                           }
                         }
                       }
@@ -73,7 +75,14 @@ jobs:
 
             try {
               const projectResult = await github.graphql(projectQuery);
-              const project = projectResult.user.projectV2;
+              const projects = projectResult.user.projectsV2.nodes;
+              
+              console.log(`🔍 Found ${projects.length} projects:`);
+              projects.forEach(p => {
+                console.log(`  - "${p.title}" (#${p.number})`);
+              });
+              
+              const project = projects.find(p => p.number === projectNumber);
 
               if (!project) {
                 console.log(`❌ Project #${projectNumber} not found.`);
